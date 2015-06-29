@@ -212,6 +212,21 @@ else
   echo "D_UEVENT=-DUSE_SELECT -DNO_POLLING" >>../../Make.cfg
 fi
 
+if test -z "$NO_SOCKETS"; then
+  args="-DTEST_SOCKETS $commonargs"
+  if $CC $args >cfg.10 2>&1; then
+    echo "using BSD sockets"
+    echo "D_NO_SOCKETS=" >>../../Make.cfg
+    if test $debug = no; then rm -f cfg.10; fi
+  else
+    echo "missing BSD sockets, socket interface disabled"
+    echo "D_NO_SOCKETS=-DNO_SOCKETS" >>../../Make.cfg
+  fi
+else
+  echo "skipping sockets, socket interface disabled"
+  echo "D_NO_SOCKETS=-DNO_SOCKETS" >>../../Make.cfg
+fi
+
 #----------------------------------------------------------------------
 # try to figure out how to get SIGFPE delivered
 #----------------------------------------------------------------------
@@ -327,6 +342,23 @@ if test -n "$fpedef"; then
   fi
 fi
 rm -f fputest
+
+# check if fenv.h present
+softfpe=
+args="-DTEST_FENV_H $commonargs"
+if $CC $args $MATHLIB >cfg.11 2>&1; then
+  echo "found fenv.h header"
+  echo "D_HAS_FENV_H=-DHAS_FENV_H" >>../../Make.cfg
+  if test "$fpedef" = "-DFPU_IGNORE"; then
+    echo "...activating software SIGFPE support"
+    softfpe=-DUSE_SOFTFPE
+  fi
+  if test $debug = no; then rm -f cfg.11; fi
+else
+  echo "WARNING fenv.h missing, no floating point environment control"
+  echo "D_HAS_FENV_H=" >>../../Make.cfg
+fi
+echo "D_USE_SOFTFPE=$softfpe" >>../../Make.cfg
 
 #----------------------------------------------------------------------
 # try to figure out how dynamic linking for plugins works

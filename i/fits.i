@@ -5,7 +5,7 @@
  *
  *-----------------------------------------------------------------------------
  *
- * Copyright (C) 2000-2010, Eric Thiébaut <thiebaut@obs.univ-lyon1.fr>
+ * Copyright (C) 2000-2015, Éric Thiébaut <eric.thiebaut@univ-lyon1.fr>
  *
  * This file is free software; you can redistribute it and/or modify it under
  * the terms of the GNU General Public License version 2 as published by the
@@ -181,16 +181,16 @@
  * Initial revision
  */
 
-fits = "$Revision: 1.34 $";
+fits = "Version: 2.0";
 local fits;
 /* DOCUMENT fits - an introduction to Yorick interface to FITS files.
 
      The  routines  provided  by   this  (standalone)  package  are  aimed  at
      reading/writing  FITS  (Flexible Image  Transport  System) files  from/to
-     Yorick.  These routines attempt to follow the FITS standard (version 1.1)
-     as defined  in NOST report  [1].  Nevertheless the  user may be  aware of
-     some limitations  (some of which  are unavoidable with such  a "flexible"
-     format as FITS):
+     Yorick.   These routines  attempt to  follow the  FITS  standard (version
+     2.1b) as  defined by IAU FITS  Working Group [2].   Nevertheless the user
+     may be aware of some limitations (some of which are unavoidable with such
+     a "flexible" format as FITS):
 
       - It is still possible to  produce a non-standard FITS file because (for
         obvious  efficiency reasons)  routines  in this  package cannot  check
@@ -247,17 +247,17 @@ local fits;
      demontrates how  to write a moderately  complex FITS file  with the basic
      routines (assuming DATA1 is a 2-dimensional array):
 
-       fh = fits_open(name, 'w');      // create new file
+       fh = fits_open(name, 'w');        // create new file
        fits_set, fh, "SIMPLE", 'T',    "true FITS file";
        fits_set, fh, "BITPIX", bitpix, "bits per pixel";
        fits_set, fh, "NAXIS",  naxis,  "number of dimensions";
        fits_set, fh, "NAXIS1", dim1,   "length of 1st dimension";
        fits_set, fh, "NAXIS2", dim2,   "length of 2nd dimension";
        fits_set, fh, "EXTEND", 'T', "this file may contain FITS extensions";
-       fits_set, fh, ...               // set any number of other cards with
-       ...                             // several calls to fits_set
-       fits_write_header, fh;          // write header part of current HDU
-       fits_write_array, fh, data1;    // write data part of current HDU
+       fits_set, fh, ...                 // set any number of other cards with
+       ...                               // several calls to fits_set
+       fits_write_header, fh;            // write header part of current HDU
+       fits_write_array, fh, data1;      // write data part of current HDU
 
        fits_new_hdu, fh, "IMAGE";        // append new "IMAGE" extension
        fits_set, fh, "BITPIX", bitpix, "bits per pixel";
@@ -343,10 +343,13 @@ local fits;
        fits_read           - simple driver to read "IMAGE" or "BINTABLE" data
        fits_write          - simple driver to write "IMAGE" data
        fits_new_image      - creates a new "IMAGE" HDU
+       fits_is_image       - check whether current HDU is an "IMAGE"
        fits_read_array     - read array data from current HDU
        fits_write_array    - write array data in current HDU
+       fits_read_group     - read random group data from current HDU
 
      Binary tables:
+       fits_is_bintable    - check whether current HDU is a binary table
        fits_new_bintable   - creates a new "BINTABLE" HDU
        fits_read_bintable  - read binary table from current HDU
        fits_write_bintable - write binary table in current HDU
@@ -442,10 +445,14 @@ local fits;
    REFERENCES:
 
      [1] "Definition of Flexible Image Transport System (FITS)", NASA/Science
-         Office of Standards and Technology, report NOST 100-1.1, September 29,
-         1995.
+         Office of Standards and Technology, report NOST 100-1.1, September
+         29, 1995.
 
-     [2] "A User's Guide for the Flexible Image Transport System (FITS)"
+     [2] "Definition of the Flexible Image Transport System (FITS)", IAU FITS
+         Working Group <http://fits.gsfc.nasa.gov/iaufwg/>, Version 2.1b,
+         December 2005.
+
+     [3] "A User's Guide for the Flexible Image Transport System (FITS)"
          http://archive.stsci.edu/fits/users_guide/
 */
 
@@ -493,7 +500,12 @@ func fits_info(fh, hdu)
   if (ncards) {
     local offset; eq_nocopy, offset, _car(fh,3);
     write, format="********  HDU - %3d  ***********************************************************\n", offset(1);
-    for (i=1; i<=ncards ; ++i) write, format="%s\n", cards(i);
+    prev_len = 1; /* used to only print a single consecutive blank line */
+    for (i = 1; i <= ncards ; ++i) {
+      s = strtrim(cards(i), 2);
+      if (prev_len > 0) write, format="%s\n", s;
+      prev_len = strlen(s);
+    }
   } else {
     write, format="******** %s ***********************************************************\n", "END OF FILE";
   }
@@ -504,8 +516,7 @@ func fits_info(fh, hdu)
 /*---------------------------------------------------------------------------*/
 /* SIMPLIFIED DRIVERS */
 
-func fits_read(filename, &fh, encoding=, hdu=, which=, rescale=,
-               pack=, select=)
+func fits_read(filename, &fh, hdu=, which=, rescale=, pack=, select=)
 /* DOCUMENT           a = fits_read(filename)
          or local fh; a = fits_read(filename, fh)
 
@@ -521,8 +532,6 @@ func fits_read(filename, &fh, encoding=, hdu=, which=, rescale=,
      binary  table  extension,  the  result  is  a  vector  of  pointers  (see
      fits_read_bintable).
 
-     Keyword ENCODING has the same meaning as in fits_open (which see).
-
      Keywords WHICH  and RESCALE have  the same meaning as  in fits_read_array
      (which see).   These keywords are ignored  if HDU to read  is not primary
      HDU nor an "image" extension.
@@ -534,19 +543,27 @@ func fits_read(filename, &fh, encoding=, hdu=, which=, rescale=,
    SEE ALSO: fits, fits_write, fits_open,
              fits_read_array, fits_read_bintable. */
 {
-  fh = fits_open(filename, 'r', encoding=encoding);
-  if (is_void(hdu)) hdu = 1;
-  else if (hdu != 1) fits_goto_hdu, fh, hdu;
-  if (hdu == 1 || (xtension = fits_get_xtension(fh)) == "IMAGE")
+  fh = fits_open(filename, 'r');
+  if (is_void(hdu)) {
+    hdu = 1;
+  } else if (hdu != 1) {
+    fits_goto_hdu, fh, hdu;
+  }
+  if (fits_is_image(fh)) {
     return fits_read_array(fh, which=which, rescale=rescale);
-  if (xtension == "BINTABLE")
+  } else if (fits_is_bintable(fh)) {
     return fits_read_bintable(fh, pack=pack, select=select);
-  if (structof(xtension) == string)
-    error, "FITS extension \""+xtension+"\" not supported";
-  error, "invalid FITS file (missing/bad XTENSION card)";
+  } else {
+    xtension = fits_get_xtension(fh);
+    if (is_string(xtension)) {
+      error, "FITS extension \""+xtension+"\" not supported";
+    } else {
+      error, "invalid FITS file (missing/bad XTENSION card)";
+    }
+  }
 }
 
-func fits_write(filename, data, encoding=, overwrite=,
+func fits_write(filename, data, overwrite=,
                 bitpix=, extend=, bscale=, bzero=,
                 template=, history=, comment=)
 /* DOCUMENT fits_write, filename, data;
@@ -558,12 +575,12 @@ func fits_write(filename, data, encoding=, overwrite=,
      FITS  "bits-per-pixel" can  be  specified by  keyword BITPIX;  otherwise,
      BITPIX is automatically guessed from the data type (see fits_bitpix_of).
 
-     Keywords EXTEND,  TEMPLATE, HISTORY COMMENT, BSCALE,  BZERO, ENCODING and
-     OVERWRITE have the same meaning as in fits_create (to see).
+     Keywords EXTEND,  TEMPLATE, HISTORY COMMENT, BSCALE,  BZERO and OVERWRITE
+     have the same meaning as in fits_create (to see).
 
      If BITPIX  is explicitely  specified and corresponds  to an  integer file
-     type (8,  16 or 32) and  neither BSCALE nor BZERO  are specified, optimal
-     BSCALE  and  BZERO  values  will  be  automatically  computed  thanks  to
+     type  (8, 16,  32 or  64)  and neither  BSCALE nor  BZERO are  specified,
+     optimal BSCALE and BZERO values  will be automatically computed thanks to
      fits_best_scale (which see).
 
 
@@ -579,7 +596,7 @@ func fits_write(filename, data, encoding=, overwrite=,
     bscale = scale(1);
     bzero = scale(2);
   }
-  fh = fits_create(filename, encoding=encoding, overwrite=overwrite,
+  fh = fits_create(filename, overwrite=overwrite,
                    bitpix=bitpix, bzero=bzero, bscale=bscale,
                    dimlist=dimsof(data), extend=extend,
                    template=template, history=history, comment=comment);
@@ -593,25 +610,22 @@ func fits_write(filename, data, encoding=, overwrite=,
 }
 
 func fits_best_scale(bitpix, cmin, cmax, debug=)
-/* DOCUMENT fits_best_scale(bitpix, data)
-         or fits_best_scale(bitpix, cmin, cmax)
-     Returns  [BSCALE,BZERO] where  BSCALE and  BZERO are  optimal  values for
+/* DOCUMENT fits_best_scale(bitpix, data);
+         or fits_best_scale(bitpix, cmin, cmax);
+     Returns  [BSCALE,BZERO] where  BSCALE and  BZERO are  optimal values  for
      rescaling to BITPIX file type.  BITPIX must correspond to an integer type
-     (BITPIX = 8, 16 or 32).   The array DATA contains all the physical values
-     to save  to the file; alternatively,  CMIN and CMAX give  the minimal and
-     maximal values in physical data.
+     (BITPIX =  8, 16, 32  or 64).  The array  DATA contains all  the physical
+     values to save to the file; alternatively, CMIN and CMAX give the minimal
+     and maximal values in physical data.
 
    SEE ALSO: fits, fits_write. */
 {
   if (bitpix == 8) {
-    fmin = 0;
-    fmax = 255;
-  } else if (bitpix == 16) {
-    fmin = -32768;
-    fmax =  32767;
-  } else if (bitpix == 32) {
-    fmin = -2147483648;
-    fmax =  2147483647;
+    fmin =   0.0;
+    fmax = 255.0;
+  } else if (bitpix == 16 || bitpix == 32 || bitpix == 64) {
+    fmin = -(2.0^(bitpix - 1));
+    fmax = -1.0 - fmin;
   } else {
     error, "expecting BITPIX for integer file type";
   }
@@ -635,8 +649,9 @@ func fits_best_scale(bitpix, cmin, cmax, debug=)
 }
 
 /*---------------------------------------------------------------------------*/
+/* FILE ACCESS ROUTINES */
 
-func fits_open(filename, filemode, encoding=, overwrite=)
+func fits_open(filename, filemode, overwrite=)
 /* DOCUMENT fits_open(filename)
          or fits_open(filename, filemode)
      Opens the FITS  file FILENAME according to FILEMODE.   The returned value
@@ -648,18 +663,6 @@ func fits_open(filename, filemode, encoding=, overwrite=)
        "a" or 'a' - append  mode, stream  get positionned  at last HDU, the
                     header of the last HDU get read and parsed.
      The default FILEMODE is "r" -- open an existing FITS file for reading.
-
-     Keyword ENCODING can be used to change the data encoding of the FITS file
-     which  is  "xdr"  for  a  regular  FITS file  (XDR  means  eXternal  Data
-     Representation, which is  natively used by all IEEE  compliant big endian
-     machine).  The value of the keyword is a string like:
-       "xdr", "sun"    - eXternal Data Representation (the default)
-       "native"        - native data representation (i.e. no conversion)
-       "i86", "pc"     - IEEE little endian machines
-       ...
-     see documentation  for "__sun"  for a list  of supported  encodings. Note
-     that using an  encoding different from IEEE big  endian (or XDR) violates
-     FITS standard.
 
      Keyword OVERWRITE  can be used to  force overwriting of  an existing file
      (otherwise it is an error to create a file that already exists).
@@ -688,13 +691,7 @@ func fits_open(filename, filemode, encoding=, overwrite=)
   }
 
   /* Set data primitives. */
-  if (is_void(encoding)) encoding= "xdr";
-  if (encoding != "native") {
-    set_encoding = symbol_def(encoding+"_primitives");
-    if (is_func(set_encoding) != 1) error, "bad encoding \""+encoding+"\"";
-    set_encoding, stream;
-  }
-  save, stream, complex; /* make stream aware of the definition of a complex */
+  _fits_set_primitives, stream;
 
   /* Create handle. */
   fh = _lst([], [], [1, 0, 0, 0, filemode], stream);
@@ -724,7 +721,7 @@ func fits_close(fh)
   return fh;
 }
 
-func fits_create(filename, encoding=, overwrite=, bitpix=, dimlist=, extend=,
+func fits_create(filename, overwrite=, bitpix=, dimlist=, extend=,
                  template=, history=, comment=, bzero=, bscale=)
 /* DOCUMENT fits_create(filename)
      Creates a new FITS file FILENAME and returns a FITS handle with mandatory
@@ -755,8 +752,7 @@ func fits_create(filename, encoding=, overwrite=, bitpix=, dimlist=, extend=,
      Keywords HISTORY and  COMMENT can be set to add some  comments in the new
      handle.  The values of these keywords may be array of strings.
 
-     Keywords ENCODING  and OVERWRITE  have the same  meaning as  in fits_open
-     routine (to see).
+     Keyword OVERWRITE has the same meaning as in fits_open() routine.
 
 
    SEE ALSO: fits, fits_open, fits_set, fits_set_dims. */
@@ -780,7 +776,7 @@ func fits_create(filename, encoding=, overwrite=, bitpix=, dimlist=, extend=,
   scale_comment = "data_value = BZERO + BSCALE*file_value";
 
   /* Create new file and set minimal header. */
-  fh = fits_open(filename, 'w', encoding=encoding, overwrite=overwrite);
+  fh = fits_open(filename, 'w', overwrite=overwrite);
   fits_set, fh, "SIMPLE", 'T',   "true FITS file created by Yorick";
   fits_set, fh, "BITPIX", bitpix, fits_bitpix_info(bitpix);
   fits_set_dims, fh, dimlist;
@@ -912,7 +908,7 @@ func fits_read_header(fh)
 
     /* Check 1st card of 1st header block. */
     if (nblocks == 1) {
-      if (block_id(1) < 0.0) error, _fits_bad_keyword(block(1:8, 1));
+      if (block_id(1) < 0) error, _fits_bad_keyword(block(1:8, 1));
       id = block_id(1);
       card = string(&block(,1));
       value = fits_parse(card, id, safe=1);
@@ -927,9 +923,9 @@ func fits_read_header(fh)
     }
 
     /* Now we can check the validity of FITS keywords. */
-    if (min(block_id) < 0.0) {
+    if (min(block_id) < 0) {
       /* Bad keyword detected: report first one. */
-      error, _fits_bad_keyword(block(1:8, where(block_id < 0.0)(1)));
+      error, _fits_bad_keyword(block(1:8, where(block_id < 0)(1)));
     }
 
     /* Search for the END keyword. */
@@ -1365,7 +1361,7 @@ func fits_write_header(fh)
     s = cards(k);
     if ((l = strlen(s)) >= 1) {
       rng = 1:min(l, 80);
-      hdr(rng, k) = (*pointer(s))(rng);
+      hdr(rng, k) = strchar(s)(rng);
     }
   }
   hdr(1, last) = 'E';
@@ -1724,7 +1720,9 @@ func fits_set(fh, key, value, comment)
       if (op != _fits_format_integer || value < 0)
         error, swrite(format=errfmt, key);
       location = 3;
-    } else if (id == _fits_id_comment || id == _fits_id_history || id == 0.0) {
+    } else if (id == _fits_id_comment ||
+               id == _fits_id_history ||
+               id == _fits_id_null) {
       if (! is_void(comment))
         error, "too many arguments for commentary FITS card";
       if (op != _fits_format_string) error, swrite(format=errfmt, key);
@@ -1908,7 +1906,7 @@ func fits_set(fh, key, value, comment)
   /* Replace every quote character (ASCII 0x27) in VALUE by two quotes and
      make sure the result is not longer than 68 characters. */
   len = strlen(value);
-  src = *pointer(value);
+  src = strchar(value);
   dst = array(char, 2*len + 1);
   i = j = 0;
   n = min(34, len);
@@ -1997,27 +1995,31 @@ func fits_read_array(fh, which=, rescale=)
   bitpix = fits_get_bitpix(fh, 1);
   if (bitpix == 8) {
     data_type = char;
-    data_size = 1;
+    elem_size = 1;
   } else if (bitpix == 16) {
     data_type = short;
-    data_size = 2;
+    elem_size = 2;
   } else if (bitpix == 32) {
+    data_type = int;
+    elem_size = 4;
+  } else if (bitpix == 64) {
     data_type = long;
-    data_size = 4;
+    elem_size = 8;
   } else if (bitpix == -32) {
     data_type = float;
-    data_size = 4;
+    elem_size = 4;
   } else if (bitpix == -64) {
     data_type = double;
-    data_size = 8;
+    elem_size = 8;
   } else {
-    error, "congratulations: you have found a BUG!";
+    error, "bad BITPIX value";
   }
   data = array(data_type, dims);
   address = offset(3);
-  if (which > 1) address += (which - 1)*numberof(data)*data_size;
-  if (_read(_car(fh,4), address, data) != numberof(data))
-    error, "cannot read data";
+  if (which > 1) address += (which - 1)*numberof(data)*elem_size;
+  if (_read(_car(fh,4), address, data) != numberof(data)) {
+    error, "short FITS file";
+  }
 
   /* Possibly rescale pixel values. */
   if (is_void(rescale) || rescale) {
@@ -2121,17 +2123,26 @@ func fits_write_array(fh, data, which=, rescale=)
       data_type = structof(data); /* should be "double" now */
     }
     if (bitpix == 8) {
+      elem_size = 1;
       file_type = char;
       file_min = 0;
       file_max = 255;
     } else if (bitpix == 16) {
+      elem_size = 2;
       file_type = short;
-      file_min = -32768;
-      file_max =  32767;
+      file_min = -1 - (file_max = 0x7FFF);
     } else if (bitpix == 32) {
+      elem_size = 4;
+      file_type = int;
+      file_min = -1 - (file_max = 0x7FFFFFFF);
+    } else if (bitpix == 64) {
+      elem_size = 8;
       file_type = long;
-      file_min = -2147483648;
-      file_max =  2147483647;
+      if (sizeof(file_type) >= 8) {
+        file_min = -1 - (file_max = 0x7FFFFFFFFFFFFFFF);
+      } else {
+        file_min = -1 - (file_max = 2.0^63.0 - 1.0);
+      }
     } else {
       error, "bad BITPIX value in FITS header";
     }
@@ -2147,9 +2158,15 @@ func fits_write_array(fh, data, which=, rescale=)
   } else {
     /* Floating point type. */
     if (bitpix == -32) {
-      if (data_type != float) data = float(data);
+      elem_size = 4;
+      if (data_type != float) {
+        data = float(data);
+      }
     } else if (bitpix == -64) {
-      if (data_type != double) data = double(data);
+      elem_size = 8;
+      if (data_type != double) {
+        data = double(data);
+      }
     } else {
       error, "bad BITPIX value in FITS header";
     }
@@ -2157,15 +2174,17 @@ func fits_write_array(fh, data, which=, rescale=)
 
   /* Write data and update offsets (note: the padding to a multiple of 2880
      bytes will be done when creating next HDU with fits_new_hdu). */
-  data_size = sizeof(data);
+  nbytes = elem_size*numberof(data); /* as written in file */
   address = offset(3);
   if (which != 1) {
-    address += (which - 1)*data_size;
-    if (address > offset(4)) /* pad file with null's */
+    address += (which - 1)*nbytes;
+    if (address > offset(4)) {
+      /* pad file with null's */
       _write, stream, offset(4), array(char, address - offset(4));
+    }
   }
   _write, stream, address, data;
-  offset(4) = max(offset(4), address + data_size);
+  offset(4) = max(offset(4), address + nbytes);
   return fh;
 }
 
@@ -2302,10 +2321,11 @@ func fits_write_bintable(fh, ptr, logical=, fixdims=)
    SEE ALSO: fits, fits_new_bintable, fits_read_bintable. */
 {
   /* Minimal checking. */
-  if (fits_get_xtension(fh) != "BINTABLE")
-    error, "current HDU is not a FITS BINTABLE";
+  if (! fits_is_bintable(fh)) {
+    error, "current HDU is not a valid FITS BINTABLE";
+  }
   if (structof(ptr) == pointer) {
-    ptr = ptr; /* force private copy */
+    ptr = ptr; /* force private copy for conversions */
   } else if (is_array(ptr)) {
     /* will save as binary table with a single field */
     ptr = &ptr;
@@ -2316,20 +2336,21 @@ func fits_write_bintable(fh, ptr, logical=, fixdims=)
   /* Find the format. */
   tform3 = "%d%1[LXBIJAEDCMP]%s";
   tform2 =   "%1[LXBIJAEDCMP]%s";
-  tfields = numberof(ptr);
-  mult = size = array(long, tfields);
+  ncols = numberof(ptr);
+  mult = size = array(long, ncols);
   nrows = -1;
-  for (i = 1; i <= tfields; ++i) {
-    local a; eq_nocopy, a, *ptr(i);
-    if (is_void(a)) {
+  for (i = 1; i <= ncols; ++i) {
+    local arr;
+    eq_nocopy, arr, *ptr(i);
+    if (is_void(arr)) {
       dims = [];
       ndims = 0;
       ncells = 0;
       first_dim = 0;
       other_dims = [];
     } else {
-      if (! is_array(a)) error, "unexpected non-array field for BINTABLE";
-      dimlist = dimsof(a);
+      if (! is_array(arr)) error, "unexpected non-array field for BINTABLE";
+      dimlist = dimsof(arr);
       ndims = dimlist(1);
       if (ndims == 0) {
         /* fix for scalars */
@@ -2348,9 +2369,9 @@ func fits_write_bintable(fh, ptr, logical=, fixdims=)
       } else if (first_dim != nrows) {
         error, "all fields of a BINTABLE must have the same number of rows";
       }
-      ncells = numberof(a)/nrows;
+      ncells = numberof(arr)/nrows;
     }
-    type = structof(a);
+    type = structof(arr);
 
     /* Parse TFORMn card or guess format specification form the current
        column data.  T is the type code in the TFORMn card, M is the repeat
@@ -2367,12 +2388,11 @@ func fits_write_bintable(fh, ptr, logical=, fixdims=)
       } else if (sread(format=tform3, tform, m, s, nil) != 2 || m < 0) {
         error, ("bad format specification in FITS card \"" + key + "\"");
       }
-      t = (*pointer(s))(1);
+      t = strchar(s)(1);
       if (ncells == 0) {
         s = 0;
         if (m != 0) {
-          error, ("repeat count must be 0 for empty "
-                  + fits_nth(i) + " column");
+          error, ("repeat count must be 0 for empty " + fits_nth(i) + " column");
         }
       } else if (t == 'A') {
         if (type != string) {
@@ -2382,7 +2402,7 @@ func fits_write_bintable(fh, ptr, logical=, fixdims=)
         if (m < ncells || m%ncells != 0) {
           error, ("string array cannot fit in " + fits_nth(i) + " column");
         }
-        length = strlen(a);
+        length = strlen(arr);
         maxlen = m/ncells;
         if (max(length) > maxlen) {
           _fits_warn, ("truncation of input string(s) to fit into "
@@ -2396,94 +2416,94 @@ func fits_write_bintable(fh, ptr, logical=, fixdims=)
           j3 = 1 + (index - 1)/nrows;
           for (k = numberof(index); k >= 1; --k) {
             range = 1 : length(k);
-            tmp(j1(k), range, j3(k)) = (*pointer(a(index(k))))(range);
+            tmp(j1(k), range, j3(k)) = strchar(arr(index(k)))(range);
           }
         }
         other_dims = grow(maxlen, other_dims);
         ++ndims;
         ptr(i) = &tmp;
-        a = [];
+        arr = [];
       } else if (m != ncells) {
         error, ("bad number of elements for "  + fits_nth(i) + " column");
       } else if (t == 'B' && (type == long || type == int ||
                               type == short || type == char)) {
         s = 1;
-        if (min(a) < 0 || max(a) > 255) {
+        if (min(arr) < 0 || max(arr) > 255) {
           _fits_warn, ("truncation of input values in "
                        + fits_nth(i) + " column");
         }
         if (type != char) {
-          ptr(i) = &char(a);
-          a = [];
+          ptr(i) = &char(arr);
+          arr = [];
         }
       } else if (t == 'I' && (type == long || type == int ||
                               type == short || type == char)) {
         s = 2;
-        if (min(a) < -32768 || max(a) > 32767) {
+        if (min(arr) < -32768 || max(arr) > 32767) {
           _fits_warn, ("truncation of input values in "
                        + fits_nth(i) + " column");
         }
         if (type != short) {
-          ptr(i) = &short(a);
-          a = [];
+          ptr(i) = &short(arr);
+          arr = [];
         }
       } else if (t == 'J' && (type == long || type == int ||
                               type == short || type == char)) {
         s = 4;
-        if (min(a) < -2147483648.0 || max(a) > 2147483647.0) {
+        if (min(arr) < -2147483648.0 || max(arr) > 2147483647.0) {
           _fits_warn, ("truncation of input values in "
                        + fits_nth(i) + " column");
         }
         if (type != long || type != int) {
-          ptr(i) = &long(a);
-          a = [];
+          ptr(i) = &long(arr);
+          arr = [];
         }
       } else if (t == 'E' && (type == double || type == float ||
                               type == long || type == int ||
                               type == short || type == char)) {
         s = 4;
         if (type != float) {
-          ptr(i) = &float(a);
-          a = [];
+          ptr(i) = &float(arr);
+          arr = [];
         }
       } else if (t == 'D' && (type == double || type == float ||
                               type == long || type == int ||
                               type == short || type == char)) {
         s = 8;
         if (type != double) {
-          ptr(i) = &double(a);
-          a = [];
+          ptr(i) = &double(arr);
+          arr = [];
         }
       } else if (t == 'C' && (type == complex || type == double ||
                               type == float || type == long || type == int ||
                               type == short || type == char)) {
         s = 8;
         tmp = array(float, nrows, 2, other_dims);
-        tmp(,1,) = float(a);
-        if (type == complex) tmp(,2,) = a.im;
+        tmp(,1,) = float(arr);
+        if (type == complex) tmp(,2,) = arr.im;
         ptr(i) = &tmp;
-        a = [];
+        arr = [];
       } else if (t == 'M' && (type == complex || type == double ||
                               type == float || type == long || type == int ||
                               type == short || type == char)) {
         s = 16;
         if (type != complex) {
-          ptr(i) = &complex(a);
-          a = [];
+          ptr(i) = &complex(arr);
+          arr = [];
         }
       } else if (t == 'L' && (type == long || type == int ||
                               type == short || type == char)) {
         s = 1;
         if (type != char) {
           tmp = array('T', nrows, ncells);
-          if (is_array((a = where(! a)))) tmp(a) = 'F';
+          if (is_array((arr = where(! arr)))) tmp(arr) = 'F';
           ptr(i) = &tmp;
-          a = [];
+          arr = [];
         }
       } else if (t == 'X') {
         error, "bit array in FITS binary table not yet implemented";
-      } else if (t == 'P') {
-        error, "pointer array in FITS binary table not yet implemented";
+      } else if (t == 'P' || t == 'Q') {
+        error, "variable sized array in FITS binary table not yet implemented";
       } else {
         error, ("illegal data type conversion in " + fits_nth(i) + " column");
       }
@@ -2507,14 +2527,14 @@ func fits_write_bintable(fh, ptr, logical=, fixdims=)
           if (logical == 2) {
             /* Treats strictly negative values as "bad" values and strictly
                positive values as "true" values. */
-            if (is_array((j = where(a < 0)))) tmp(j) = '\0';
-            if (is_array((j = where(a > 0)))) tmp(j) = 'T';
+            if (is_array((j = where(arr < 0)))) tmp(j) = '\0';
+            if (is_array((j = where(arr > 0)))) tmp(j) = 'T';
           } else {
             /* Treats non-zero values as "true" values. */
-            if (is_array((j = where(a)))) tmp(j) = 'T';
+            if (is_array((j = where(arr)))) tmp(j) = 'T';
           }
           ptr(i) = &tmp; /* only affect local (private) copy */
-          a = [];
+          arr = [];
         } else {
           t = 'J';
           s = 4;
@@ -2534,7 +2554,7 @@ func fits_write_bintable(fh, ptr, logical=, fixdims=)
       } else if (type == string) {
         t = 'A';
         s = 1;
-        length = strlen(a);
+        length = strlen(arr);
         maxlen = max(length);
         m = maxlen*ncells;
         tmp = array(char, nrows, maxlen, ncells);
@@ -2545,13 +2565,13 @@ func fits_write_bintable(fh, ptr, logical=, fixdims=)
           j3 = 1 + (index - 1)/nrows;
           for (k = numberof(index); k >= 1; --k) {
             range = 1 : length(k);
-            tmp(j1(k), range, j3(k)) = (*pointer(a(index(k))))(range);
+            tmp(j1(k), range, j3(k)) = strchar(arr(index(k)))(range);
           }
         }
         other_dims = grow(maxlen, other_dims);
         ++ndims;
         ptr(i) = &tmp;
-        a = [];
+        arr = [];
       } else if (type == pointer) {
         error, "pointer fields not yet implemented in BINTABLE";
       } else {
@@ -2597,7 +2617,7 @@ func fits_write_bintable(fh, ptr, logical=, fixdims=)
   /* Update header information then write header. */
   size *= mult; /* number of bytes per rows for each field */
   nbytes = sum(size);
-  pcount = _fits_bintable_header(fh, nbytes, nrows, tfields);
+  pcount = _fits_bintable_header(fh, nbytes, nrows, ncols);
   fits_write_header, fh;
 
   /* Write data. */
@@ -2683,7 +2703,10 @@ func fits_read_bintable(fh, pack=, select=, raw_string=, raw_logical=,
    SEE ALSO: fits, fits_write_bintable, fits_pack_bintable. */
 {
   /* Minimal checking. */
-  if (fits_get_xtension(fh) != "BINTABLE" || fits_get_naxis(fh) != 2) {
+  xtension = fits_get_xtension(fh);
+  if ((xtension != "BINTABLE" &&
+       xtension != "3DTABLE" &&
+       xtension != "A3DTABLE") || fits_get_naxis(fh) != 2) {
     error, "current HDU is not a valid FITS BINTABLE";
   }
   pitch = fits_get(fh, "NAXIS1"); /* bytes per row */
@@ -3033,14 +3056,13 @@ func fits_read_bintable(fh, pack=, select=, raw_string=, raw_logical=,
 func fits_pack_bintable(ptr, list)
 /* DOCUMENT fits_pack_bintable(ptr)
          or fits_pack_bintable(ptr, list)
-     Packs binary table  PTR into a single array; PTR must  be a pointer array
-     (e.g.  as the  one  returned by  fits_read_bintable  which see).   Second
-     argument LIST can be specified to select or re-order some fields: LIST is
-     a vector of indices of selected and re-ordered fields, the result will be
-     as  if PTR(LIST) was  given as  unique argument.   The returned  array is
-     NROWS-by-NCOLS where  NROWS is the  first dimension of all  fields (which
-     must be  the same) and NCOLS  is the sum  of the second dimension  of all
-     fields.
+     This function packs binary table  data into a single array.  Argument PTR
+     must be a pointer array (e.g., as the one returned by fits_read_bintable,
+     which see).  Second argument LIST  can be specified to select or re-order
+     some columns:  the result  will be  as if PTR(LIST)  was given  as unique
+     argument.  The returned array is  NROWS-by-NCOLS where NROWS is the first
+     dimension of all fields (which must be  the same) and NCOLS is the sum of
+     the other dimensions of all columns.
 
    SEE ALSO: fits_read_bintable. */
 {
@@ -3097,15 +3119,15 @@ func fits_pack_bintable(ptr, list)
 }
 
 /* PRIVATE */ func _fits_bintable_header(fh, nbytes, nrows, tfields)
-/* DOCUMENT _fits_bintable_header(fh, nbytes, nrows, tfields)
+/* DOCUMENT pcount = _fits_bintable_header(fh, nbytes, nrows, tfields)
      Set/update  header information  in  FITS  handle FH  for  a binary  table
      extension.  NBYTES is the number of  bytes per row of the table, NROWS is
-     the number of table rows and  TFIELDS is the number of fields (columns in
-     the  table).  FITS  card "XTENSION"  with value  "BINTABLE"  must already
-     exists  in  the header  (this  is  not  checked).  FITS  cards  "BITPIX",
-     "NAXIS",  "NAXIS1",  "NAXIS2",  "PCOUNT",  "GCOUNT",  and  "TFIELDS"  get
-     created/updated by this routine.  The  value of PCOUNT is computed by the
-     routine and returned to the caller.
+     the number  of table  rows and TFIELDS  is the  number of columns  in the
+     table.  FITS card "XTENSION" with value "BINTABLE" must already exists in
+     the  header  (this  is  not  checked).   FITS  cards  "BITPIX",  "NAXIS",
+     "NAXIS1", "NAXIS2", "PCOUNT", "GCOUNT", and "TFIELDS" get created/updated
+     by this  routine.  The  value of  PCOUNT is computed  by the  routine and
+     returned to the caller.
 
    SEE ALSO: fits, fits_new_bintable, fits_write_bintable. */
 {
@@ -3131,14 +3153,14 @@ func fits_read_bintable_as_hashtable(fh, h, format=,
      FH and make  it into a hash  table.  If optional argument H  is given, it
      must be an  existing hash table to be augmented with  the contents of the
      binary table.  The (augmented) hash table is returned.  This function can
-     only be used with the hash table extension.
+     only be used with the hash tables provided by the "Yeti" extension.
 
-     The members of  the hash table get named after the  value of the 'TTYPEn'
+     The members of  the hash table get named after the  value of the "TTYPEn"
      card converted to  lowercase (where n is the  field number).  For missing
-     'TTYPEn' cards, the value of keyword  FORMAT is used to define the member
+     "TTYPEn" cards, the value of keyword  FORMAT is used to define the member
      name as swrite(format=FORMAT,n).  The  default value for FORMAT is "_%d".
      If FORMAT is specified, it must contain exactly one directive to write an
-     integer and no  other format directives.  If a  card 'TUNITn' exists, its
+     integer and no  other format directives.  If a  card "TUNITn" exists, its
      value is stored  into member with "_units" appended  to the corresponding
      field name.
 
@@ -3200,7 +3222,7 @@ func fits_index_of_table_field(fh, name)
   if (structof(name) != string) error, "expecting table column name(s)";
   tfields = fits_get(fh, "TFIELDS");
   ttype = array(string, tfields);
-  for (i=1 ; i<=tfields ; ++i) {
+  for (i = 1; i <= tfields; ++i) {
     s = fits_get(fh, swrite(format="TTYPE%d", i));
     if (structof(s) == string && strlen(s)) {
       ttype(i) = fits_tolower(s);
@@ -3208,7 +3230,7 @@ func fits_index_of_table_field(fh, name)
   }
   n = numberof(name);
   index = array(long, dimsof(name)); // result will have same geometry
-  for (i=1 ; i<=n ; ++i) {
+  for (i = 1; i <= n; ++i) {
     j = where(fits_tolower(fits_trimright(name(i))) == ttype);
     if (numberof(j) != 1) {
       if (is_array(j)) error, "more than one field match \""+name(i)+"\"";
@@ -3299,6 +3321,329 @@ _fits_bintable_setup, 'X', _FITS_TFORM_BIT;
 _fits_bintable_setup = []; /* destroy the helper function */
 
 /*---------------------------------------------------------------------------*/
+/* RANDOM GROUP */
+
+func fits_read_group(fh, fix)
+/* DOCUMENT ptr = fits_read_group(fh)
+
+     Reads data from random group in current HDU of FITS handle FH.
+     The output is a pointer array, say PTR, such that:
+
+     *PTR(1) = PARAM array of PCOUNT-by-GCOUNT parameter values
+     *PTR(2) = DATA array of data (with NDIMS = NAXIS - 1 dimensions)
+     *PTR(3) = PTYPE array of PCOUNT strings
+     *PTR(4) = PUNIT array of PCOUNT strings (non-standard)
+     *PTR(5) = CTYPE array of NDIMS strings: axis name
+     *PTR(6) = CUNIT array of NDIMS strings: with axis units
+     *PTR(7) = CRPIX array of NDIMS reals: 1-based index of reference point
+     *PTR(8) = CRVAL array of NDIMS reals: coordinate value of reference point
+     *PTR(9) = CDELT array od NDIMS reals: coordinate step along this axis
+     *PTR(10)= CROTA array od NDIMS reals: coordinate rotation angle
+
+
+   SEE ALSO: fits_open, fits_read.
+ */
+{
+  hdu = fits_current_hdu(fh);
+  if (fits_get_groups(fh) != _fits_true) {
+    error, swrite(format="HDU %d has no random group", hdu);
+  }
+  naxis = fits_get_naxis(fh, fix);
+  if (naxis < 1) {
+    error, swrite(format="bad NAXIS value for random group in HDU %d", hdu);
+  }
+  fmt = "NAXIS%d";
+  dimlist = array(long, naxis);
+  for (k = 1; k <= naxis; ++k) {
+    key = swrite(format=fmt, k);
+    id = fits_id(key);
+    value = fits_get_special(fh, key, id, 3 + k, fix);
+    if (structof(value) != long || value < 0) {
+      error, "bad "+key+" value";
+    }
+    dimlist(k) = value;
+  }
+  if (dimlist(1) != 0L) {
+    error, swrite(format="NAXIS1 must be 0 for random group in HDU %d", hdu);
+  }
+  if (naxis > 1) {
+    dimlist(1) = naxis - 1;
+    ndata = dimlist(2);
+    for (k = 3; k <= naxis; ++k) {
+      ndata *= dimlist(k);
+    }
+  } else {
+    ndata = 0L;
+  }
+
+  gcount = fits_get_gcount(fh);
+  pcount = fits_get_pcount(fh);
+  number = gcount*(pcount + ndata);
+  ptr = array(pointer, 10);
+  if (number <= 0) {
+    return ptr;
+  }
+
+  /* Read all the values (parameters and group data). */
+  bitpix = fits_get_bitpix(fh, fix);
+  type = fits_bitpix_type(bitpix, native=0);
+  buffer = array(type, pcount + ndata, gcount);
+  address = _car(fh, 3)(3);
+  stream = _car(fh, 4);
+  if (type != char) {
+    _read, stream, address, buffer;
+  } else if (_read(stream, address, buffer) != number) {
+    error, swrite(format="short file while reading random group data in HDU %d",
+                  hdu);
+  }
+
+  /* Local variable to query values and error message format. */
+  local value;
+  fmt = "bad data type for keyword %s in HDU %d";
+
+  /* Get parameters and properly scale their values. */
+  type = fits_bitpix_type(bitpix, native=1);
+  if (pcount >= 1) {
+    param = type(buffer(1:pcount, ..));
+    ptype = array(string, pcount);
+    punit = array(string, pcount);
+    nth = swrite(format="%d", indgen(pcount));
+    for (k = 1; k <= pcount; ++k) {
+
+      key = "PTYPE" + nth(k);
+      if (_fits_get_string(value, fh, key)) {
+        if (! is_void(value)) _fits_warn, swrite(format=fmt, key, hdu);
+        value = key;
+      }
+      ptype(k) = value;
+
+      key = "PUNIT" + nth(k);
+      if (_fits_get_string(value, fh, key)) {
+        if (! is_void(value)) _fits_warn, swrite(format=fmt, key, hdu);
+      } else {
+        punit(k) = value;
+      }
+
+      key = "PZERO" + nth(k);
+      if (_fits_get_real(value, fh, key)) {
+        if (! is_void(value)) _fits_warn, swrite(format=fmt, key, hdu);
+        value = 0.0;
+      }
+      pzero = value;
+
+      key = "PSCAL" + nth(k);
+      if (_fits_get_real(value, fh, key)) {
+        if (! is_void(value)) _fits_warn, swrite(format=fmt, key, hdu);
+        value = 1.0;
+      }
+      pscal = value;
+
+      if (pzero != 0.0 || pscal != 1.0) {
+        param(k, ..) = pscal*param(k, ..) + pzero;
+      }
+    }
+    ptype = fits_toupper(ptype);
+
+    /* Account for multi-word precision: add (after scaling)
+       parameters with same PTYPE. */
+    select = array(1n, pcount);
+    flag = 0n;
+    for (j = 1; j <= pcount; ++j) {
+      for (k = j + 1; k <= pcount; ++k) {
+        if (ptype(j) == ptype(k)) {
+          param(j, ..) += param(k, ..);
+          select(k) = 0n;
+          flag = 1n;
+        }
+      }
+    }
+    if (flag) {
+      j = where(select);
+      param = param(j, ..);
+      ptype = ptype(j, ..);
+      punit = punit(j, ..);
+    }
+  } else {
+    param = [];
+    ptype = [];
+    punit = [];
+  }
+
+  /* Get data values and information. */
+  if (ndata >= 1) {
+    if (gcount > 1) {
+      data = array(type, dimlist, gcount);
+    } else {
+      data = array(type, dimlist);
+    }
+    data(*) = buffer(pcount + 1 : 0, ..)(*);
+    buffer = [];
+    bscale = fits_get_bscale(fh);
+    bzero = fits_get_bzero(fh);
+    if (bscale != 1.0 || bzero != 0.0) {
+      data = bscale*data + bzero;
+    }
+    ncols = naxis - 1;
+    ctype = array(string, ncols);
+    cunit = array(string, ncols);
+    crpix = array(double, ncols);
+    crval = array(double, ncols);
+    cdelt = array(double, ncols);
+    crota = array(double, ncols);
+    nth = swrite(format="%d", indgen(2 : naxis));
+    for (k = 1; k < naxis; ++k) {
+
+      key = "CTYPE" + nth(k);
+      if (_fits_get_string(value, fh, key)) {
+        if (! is_void(value)) _fits_warn, swrite(format=fmt, key, hdu);
+        value = key;
+      }
+      ctype(k) = value;
+
+      key = "CUNIT" + nth(k);
+      if (_fits_get_string(value, fh, key)) {
+        if (! is_void(value)) _fits_warn, swrite(format=fmt, key, hdu);
+      } else {
+        cunit(k) = value;
+      }
+
+      key = "CRPIX" + nth(k);
+      def = 1.0;
+      if (_fits_get_real(value, fh, key, def) == 2) {
+        _fits_warn, swrite(format=fmt, key, hdu);
+        value = def;
+      }
+      crpix(k) = value;
+
+      key = "CRVAL" + nth(k);
+      def = 1.0;
+      if (_fits_get_real(value, fh, key, def) == 2) {
+        _fits_warn, swrite(format=fmt, key, hdu);
+        value = def;
+      }
+      crval(k) = value;
+
+      key = "CDELT" + nth(k);
+      def = 1.0;
+      if (_fits_get_real(value, fh, key, def) == 2) {
+        _fits_warn, swrite(format=fmt, key, hdu);
+        value = def;
+      }
+      cdelt(k) = value;
+
+      crota(k) = value;
+      key = "CROTA" + nth(k);
+      def = 0.0;
+      if (_fits_get_real(value, fh, key, def) == 2) {
+        _fits_warn, swrite(format=fmt, key, hdu);
+        value = def;
+      }
+      crota(k) = value;
+    }
+    ctype = fits_toupper(ctype);
+
+  } else {
+    data = [];
+    ctype = [];
+    cunit = [];
+    crpix = [];
+    crval = [];
+    cdelt = [];
+    crota = [];
+  }
+
+  /* Build up result. */
+  ptr( 1) = &param;
+  ptr( 2) = &data;
+  ptr( 3) = &ptype;
+  ptr( 4) = &punit;
+  ptr( 5) = &ctype;
+  ptr( 6) = &cunit;
+  ptr( 7) = &crpix;
+  ptr( 8) = &crval;
+  ptr( 9) = &cdelt;
+  ptr(10) = &crota;
+
+  return ptr;
+}
+
+local _fits_get_logical, _fits_get_integer, _fits_get_string;
+local _fits_get_real, _fits_get_complex;
+/* DOCUMENT _fits_get_integer(variable, fh, key [, def]);
+         or _fits_get_real(variable, fh, key [, def]);
+         or _fits_get_complex(variable, fh, key [, def]);
+         or _fits_get_string(variable, fh, key [, def]);
+         or _fits_get_logical(variable, fh, key [, def]);
+
+     Get the value of FITS keyword KEY with a given type.  The value is stored
+     into VARIABLE (a local symbol  for the caller) after proper conversion if
+     required.  Optional  argument DEF provides  a default value.   The result
+     is: 0 to indicate success, 1 to  indicate that no such card was found, or
+     2 to indicate that the card has invalid type.
+
+   SEE ALSO: fits_get.
+ */
+func _fits_get_logical(&value, fh, key, def)
+{
+  value = fits_get(fh, key);
+  if (is_void(value)) {
+    if (is_void(def)) return 1;
+    value = def;
+  }
+  return (structof(value) == char ? 0 : 2);
+}
+func _fits_get_integer(&value, fh, key, def)
+{
+  value = fits_get(fh, key);
+  if (is_void(value)) {
+    if (is_void(def)) return 1;
+    value = def;
+  }
+  return (structof(value) == long ? 0 : 2);
+}
+func _fits_get_real(&value, fh, key, def)
+{
+  value = fits_get(fh, key);
+  if (is_void(value)) {
+    if (is_void(def)) return 1;
+    value = def;
+  }
+  if ((s = structof(value)) == double) {
+    return 0;
+  }
+  if (s == long) {
+    value = double(value);
+    return 0;
+  }
+  return 2;
+}
+func _fits_get_complex(&value, fh, key, def)
+{
+  value = fits_get(fh, key);
+  if (is_void(value)) {
+    if (is_void(def)) return 1;
+    value = def;
+  }
+  if ((s = structof(value)) == complex) {
+    return 0;
+  }
+  if (s == double || s == long) {
+    value = complex(value);
+    return 0;
+  }
+  return 2;
+}
+func _fits_get_string(&value, fh, key, def)
+{
+  value = fits_get(fh, key);
+  if (is_void(value)) {
+    if (is_void(def)) return 1;
+    value = def;
+  }
+  return (structof(value) == string ? 0 : 2);
+}
+
+/*---------------------------------------------------------------------------*/
 /* MISCELLANEOUS */
 
 /* Note: The following fits_toupper and fits_tolower routines are ~2 times
@@ -3383,8 +3728,9 @@ func fits_check_bitpix(bitpix)
      Test if FITS bits-per-pixel value BITPIX is valid.
    SEE ALSO: fits, fits_bitpix_of, fits_bitpix_type, fits_bitpix_info. */
 {
-  return ((bitpix > 0 && (bitpix == 8 || bitpix == 16 || bitpix == 32)) ||
-          bitpix == -32 || bitpix == -64);
+  return (bitpix > 8
+          ? (bitpix == 16 || bitpix ==  32 || bitpix ==  64)
+          : (bitpix ==  8 || bitpix == -32 || bitpix == -64));
 }
 
 func fits_bitpix_info(bitpix)
@@ -3392,19 +3738,39 @@ func fits_bitpix_info(bitpix)
      Return string information about FITS bits-per-pixel value.
    SEE ALSO: fits, fits_bitpix_of, fits_bitpix_type, fits_check_bitpix. */
 {
-  if (bitpix ==   8) return "8-bit twos complement binary unsigned integer";
-  if (bitpix ==  16) return "16-bit twos complement binary integer";
-  if (bitpix ==  32) return "32-bit twos complement binary integer";
-  if (bitpix == -32) return "IEEE single precision floating point";
-  if (bitpix == -64) return "IEEE double precision floating point";
+  if (bitpix > 8) {
+    if (bitpix ==  16) return "16-bit twos complement binary integer";
+    if (bitpix ==  32) return "32-bit twos complement binary integer";
+    if (bitpix ==  64) return "64-bit twos complement binary integer";
+  } else {
+    if (bitpix ==   8) return "8-bit twos complement binary unsigned integer";
+    if (bitpix == -32) return "IEEE single precision floating point";
+    if (bitpix == -64) return "IEEE double precision floating point";
+  }
   error, "invalid BITPIX value";
 }
 
 func fits_bitpix_type(bitpix, native=)
 /* DOCUMENT fits_bitpix_type(bitpix)
-         or fits_bitpix_type(bitpix, native=1)
-     Returns Yorick data  type given by FITS bits-per-pixel  value BITPIX.  If
-     keyword NATIVE is true, return the native data type matching BITPIX.
+         or fits_bitpix_type(bitpix, native=)
+     The function fits_bitpix_type returns Yorick  data type given by the fits
+     bits-per-pixel value BITPIX according to the following table:
+
+         +----------------------------------------------------------------+
+         | Bitpix  Type    Description (in FITS file)                     |
+         +----------------------------------------------------------------+
+         |      8  char     8-bit twos complement binary unsigned integer |
+         |     16  short   16-bit twos complement binary integer          |
+         |     32  int     32-bit twos complement binary integer          |
+         |     64  long    64-bit twos complement binary integer          |
+         |    -32  float   IEEE 32-bit floating point                     |
+         |    -64  double  IEEE 64-bit floating point                     |
+         +----------------------------------------------------------------+
+
+      If  keyword NATIVE  is  true, then  the  functions tries  to return  the
+      closest data Yorick type (with no loss of accuracy).
+
+
    SEE ALSO: fits, fits_bitpix_of, fits_bitpix_info, fits_check_bitpix. */
 {
   if (native) {
@@ -3420,11 +3786,15 @@ func fits_bitpix_type(bitpix, native=)
     }
   } else {
     /* Assume XDR type. */
-    if (bitpix ==   8) return char;
-    if (bitpix ==  16) return short;
-    if (bitpix ==  32) return long;
-    if (bitpix == -32) return float;
-    if (bitpix == -64) return double;
+    if (bitpix > 8) {
+      if (bitpix ==  16) return short;
+      if (bitpix ==  32) return int;
+      if (bitpix ==  64) return long;
+    } else {
+      if (bitpix ==   8) return char;
+      if (bitpix == -32) return float;
+      if (bitpix == -64) return double;
+    }
   }
   error, "invalid/unsupported BITPIX value";
 }
@@ -3449,22 +3819,49 @@ func fits_bitpix_of(x, native=)
   if (native) {
     /* Compute BITPIX. */
     bpb = 8; /* assume 8 bits per byte */
-    if (x==char || x==short || x==int || x==long) {
+    if (x == char || x == short || x == int || x == long) {
       bitpix = bpb*sizeof(x);
-      if (bitpix == 8 || bitpix == 16 || bitpix == 32) return bitpix;
+      if (bitpix == 8 || bitpix == 16 || bitpix == 32 || bitpix == 64) {
+        return bitpix;
+      }
     } else if (x == float || x == double) {
       bitpix = -bpb*sizeof(x);
-      if (bitpix == -32 || bitpix == -64) return bitpix;
+      if (bitpix == -32 || bitpix == -64) {
+        return bitpix;
+      }
     }
   } else {
     /* Assume data will be read/written as XDR. */
-    if (x == char) return 8;
-    if (x == short) return 16;
-    if (x == int || x == long) return 32;
-    if (x == float) return -32;
+    if (x == char)   return   8;
+    if (x == short)  return  16;
+    if (x == int)    return  32;
+    if (x == long)   return  64;
+    if (x == float)  return -32;
     if (x == double) return -64;
   }
   error, "unsupported data type \""+nameof(x)+"\"";
+}
+
+local fits_is_image, fits_is_bintable;
+/* DOCUMENT fits_is_image(fh);
+         or fits_is_bintable(fh);
+
+     Check whether current HDU  in FITS handle FH is a FITS  image or a binary
+     table.
+
+   SEE ALSO: fits_read_array, fits_read_bintable.
+ */
+
+func fits_is_image(fh)
+{
+  return (fits_current_hdu(fh) == 1 || fits_get_xtension(fh) == "IMAGE");
+}
+
+func fits_is_bintable(fh)
+{
+  xtension = fits_get_xtension(fh);
+  return ((xtension == "BINTABLE" || xtension == "A3DTABLE" ||
+           xtension == "3DTABLE") && fits_get_naxis(fh) == 2);
 }
 
 /*---------------------------------------------------------------------------*/
@@ -3499,11 +3896,11 @@ func fits_parse(card, id, safe=)
    SEE ALSO: fits, fits_get, fits_id. */
 {
   extern _fits_parse_comment;
-  extern _fits_id_comment, _fits_id_history, _fits_id_hierarch;
+  extern _fits_id_comment, _fits_id_history, _fits_id_null, _fits_id_hierarch;
 
   if (is_void(id)) id = fits_id(card);
 
-  if (id == 0.0 || id == _fits_id_comment || id == _fits_id_history) {
+  if (id == _fits_id_null || id == _fits_id_comment || id == _fits_id_history) {
     /* Deal with commentary card. */
     _fits_parse_comment = [];
     return strpart(card, 9:);
@@ -3573,7 +3970,7 @@ func fits_parse(card, id, safe=)
     } while ((s=p2) && !(n%2));
     if (! sread(s, format="%1s %[^\a]", q, _fits_parse_comment) || q=="/") {
       /* discard trailing spaces which are not significant in FITS */
-      i = numberof((c = *pointer(value)));
+      i = numberof((c = strchar(value)));
       while (--i) { if (c(i) != ' ') return string(&c(1:i)); }
       return "";
     }
@@ -3664,61 +4061,121 @@ func fits_get(fh, pattern, &comment, default=, promote=)
 
 /* PRIVATE */ local _fits_match_id;
 func fits_match(fh, pattern)
-/* DOCUMENT fits_match(fh, pattern)
-     Return array  of int's which are  non-zero where FITS card  names in FITS
-     handle FH match PATTERN.  PATTERN must  be a scalar string or a numerical
-     identifier.   As a special  case, if  PATTERN is  of the  form "KEYWORD#"
-     (i.e.   last character  of PATTERN  is a  '#'), then  any  human readable
-     integer  will  match the  '#',  e.g.  "NAXIS#"  will match  "NAXIS3"  and
-     "NAXIS11" but not "NAXIS" nor "QNAXIS4.
+/* DOCUMENT fits_match(fh, pattern);
+
+     The function  fits_match() returns an  array of int's which  are non-zero
+     where FITS card names in FITS handle FH match PATTERN.  PATTERN must be a
+     scalar string or a numerical identifier.
+
+     For string patterns,  the last character of PATTERN may be  a hash '#' to
+     match any  human readable integer  (in decimal notation), or  an asterisk
+     '*' to  match anything.  For  instance, "NAXIS#" will match  "NAXIS3" and
+     "NAXIS11" but not "NAXIS" nor "QNAXIS4".
 
      Global/extern   variable  _fits_match_id  is   set  with   the  numerical
-     identifier of PATTERN (without last '#' if any).
+     identifier of PATTERN (without last '#' or '*' if any).
 
-     "HIERARCH"  cards  are  supported.   The  '#' special  character  is  not
-     supported on them, though.
+     "HIERARCH" cards are supported.  The '#' special character is not
+     supported on them, though.  For instance, using PATTERN
+
+         "HIERARCH ESO ISS TEL2 RA"
+
+     will match the FITS cards  starting with PATTERN (without considering the
+     case of letters), then any number of spaces, then an equal sign, .  Using
+     PATTERN
+
+         "HIERARCH ESO *"
+
+     will match "HIERARCH ESO ISS TEL2 RA" and "HIERARCH ESO ISS TEL2 DEC" but
+     not "HIERARCH ESOTEL RA".
 
 
    SEE ALSO: fits, fits_get_cards, fits_rehash. */
 {
-  extern _fits_multiplier, _fits_match_id;
-  if (! is_array(_car(fh,1))) return;
-  if ((s = structof(pattern)) == double) {
-    return (_car(fh,2) == (_fits_match_id = pattern));
-  } else if (s != string) {
+  extern _fits_match_id;
+
+  /* Minimal checking of the arguments. */
+  arg_type = 0;
+  if (is_scalar(pattern)) {
+    if (is_string(pattern)) {
+      arg_type = 1;
+    } else if (_fits_check_idtype(pattern)) {
+      arg_type = 2;
+    }
+  }
+  if (arg_type == 0) {
     error, "PATTERN must be a scalar string or a numerical identifier";
   }
-  if (strpart(pattern, 1:8) == "HIERARCH") {
-    test = (_car(fh,2) == (_fits_match_id = _fits_id_hierarch));
-    if (anyof(test)) {
-      index = where(test);
-      test(index) = (fits_trimright(strtok(_car(fh,1)(index), "=")(1,))
-                     == fits_trimright(pattern));
+
+  /* Search the matching cards in current HDU. */
+  if (! is_array(_car(fh,1))) {
+    _fits_match_id = [];
+    return; /* no cards */
+  }
+  if (arg_type == 2) {
+    return (_car(fh,2) == (_fits_match_id = _fits_idtype(pattern)));
+  }
+  if ((last = strpart(pattern, 0:0)) == "#") {
+    /* Match a keyword with any number appended. */
+    if ((len = strlen(pattern)) > 7) {
+      _fits_match_id = -1; // means something wrong
+      return array(0n, numberof(_car(fh,2)));
     }
-    return test;
-  }
-  if (strpart(pattern, 0:0) != "#") {
-    return (_car(fh,2) == (_fits_match_id = fits_id(pattern)));
-  }
-  if ((len = strlen(pattern)) > 7) {
-    _fits_match_id = -1.0; // means something wrong
-    return array(0n, numberof(_car(fh,2)));
-  }
-  if (len <= 1) {
-    _fits_match_id = 0.0;
-    ok = array(1n, numberof(_car(fh,2)));
+    if (len <= 1) {
+      _fits_match_id = _fits_id_null;
+      test = array(1n, numberof(_car(fh,2)));
+    } else {
+      _fits_match_id = fits_id(strpart(pattern, 1:-1));
+      test = (_car(fh,2) % _fits_multiplier(len)) == _fits_match_id;
+    }
+    if (is_array((i = where(test)))) {
+      u = v = string(0);
+      n = numberof((w = strpart(_car(fh,1)(i), len:8)));
+      for (j = 1; j <= n; ++j) {
+        if (sread(format="%[0-9]%s", w(j), u, v) != 1) {
+          test(i(j)) = 0n;
+        }
+      }
+    }
+  } else if (last == "*") {
+    /* Match a keyword with anything appended. */
+    if ((len = strlen(pattern)) <= 1) {
+      /* All cards do match. */
+      _fits_match_id = _fits_id_null;
+      test = array(1n, numberof(_car(fh,2)));
+    } else {
+      _fits_match_id = fits_id(strpart(pattern, 1:-1));
+      if (_fits_match_id == _fits_id_hierarch) {
+        /* Slow search. */
+        test = strglob(pattern, _car(fh,1), case=0, esc=0);
+      } else {
+        /* Fast search based on numerical identifiers. */
+       test = (_car(fh,2) % _fits_multiplier(len)) == _fits_match_id;
+      }
+    }
   } else {
-    _fits_match_id = fits_id(strpart(pattern, 1:-1));
-    ok = (_car(fh,2) % _fits_multiplier(len)) == _fits_match_id;
-  }
-  if (is_array((i = where(ok)))) {
-    u = v = string(0);
-    n = numberof((w = strpart(_car(fh,1)(i), len:8)));
-    for (j=1 ; j<=n ; ++j) {
-      if (sread(format="%[0-9]%s", w(j), u, v) != 1) ok(i(j)) = 0n;
+    _fits_match_id = fits_id(pattern);
+    test = (_car(fh,2) == _fits_match_id);
+    if (_fits_match_id == _fits_id_hierarch && anyof(test)) {
+      /* Unfortunately, strgrep() cannot be used to match because, the case of
+         letters is significant and because it would break if PATTERN has some
+         special characters. */
+      index = where(test);
+      test = array(0n, dimsof(test)); /* reset the result of the test */
+      tmp = _car(fh,1)(index); /* all cards starting with "HIERARCH " */
+      sel = strfind("=", tmp); /* locate the 1st '=' in these cards */
+      sel(1,..) = 0; /* will extract starting from first character ... */
+      --sel(2, ..); /* ... to the character just before the 1st '='; cards
+                       with no '=' will be extracted as empty strings */
+      sel = where(strcase(1, fits_trimright(pattern)) ==
+                  strcase(1, fits_trimright(strpart(tmp, sel))));
+      if (is_array(sel)) {
+        test(index(sel)) = 1n;
+      }
     }
   }
-  return ok;
+
+  return test;
 }
 
 func fits_get_cards(fh, pattern)
@@ -3763,11 +4220,11 @@ func fits_id(card)
 
    SEE ALSO: fits, fits_key, fits_rehash. */
 {
-  extern _fits_digitize, _fits_multiplier;
-  if ((len = numberof((c = *pointer(card)))) <= 1) return 0.0;
+  extern _fits_digitize, _fits_multiplier, _fits_id_null;
+  if ((len = numberof((c = strchar(card)))) <= 1) return _fits_id_null;
   len = min(8, len - 1);
-  digit = _fits_digitize(1 + c(1:len));
-  if (min(digit) < 0  || min((!digit)(dif)) < 0) error, _fits_bad_keyword(c);
+  digit = _fits_digitize(1 + (c(1:len) & 0xFF));
+  if (min(digit) < 0 || min((!digit)(dif)) < 0) error, _fits_bad_keyword(c);
   return sum(_fits_multiplier(1:len)*digit);
 }
 
@@ -3778,7 +4235,7 @@ func fits_id(card)
    SEE ALSO: fits_id, fits_read_header. */
 {
   if ((n = min(8, numberof(c)))) {
-    digit = _fits_digitize(1 + c(1:n));
+    digit = _fits_digitize(1 + (c(1:n) & 0xFF));
     do {
       if (digit(n)) {
         key = string(&c(1:n));
@@ -3801,10 +4258,10 @@ func fits_id(card)
      set to -1.
    SEE ALSO: fits, fits_id, fits_key, fits_rehash. */
 {
-  digit = _fits_digitize(1 + hdr(1:8,));
+  digit = _fits_digitize(1 + (hdr(1:8,) & 0xFF));
   id = _fits_multiplier(+)*digit(+,);
   if (anyof((bad = (digit(min,) < 0) | ((! digit)(dif,)(min,) < 0))))
-    id(where(bad)) = -1.0;
+    id(where(bad)) = -1;
   return id;
 }
 
@@ -3814,9 +4271,10 @@ func fits_key(id)
      string FITS keyword(s) without trailing spaces.
    SEE ALSO: fits, fits_id. */
 {
-  extern _fits_max_id;
-  if (min(id) < 0.0 || max(id) > _fits_max_id || max(id%1.0) > 0.0)
-    error, "invalid FITS floating point identifier";
+  if (min(id) < 0 || max(id) > _fits_max_id ||
+      (is_real(id) && max(id%1) > 0)) {
+    error, "invalid FITS numerical identifier";
+  }
   return fits_map(_fits_key, id);
 }
 
@@ -3827,11 +4285,20 @@ func fits_key(id)
    SEE ALSO: fits_key. */
 {
   extern _fits_multiplier, _fits_alphabet;
-  c = array(double, 8);
+  c = array(long, 8);
   basis = _fits_multiplier(2);
   r = id;
-  for (i=1 ; i<=8 ; ++i) r = (r - (c(i) = r%basis))/basis;
-  return string(&_fits_alphabet(1 + long(c)));
+  /* begin of unrolled loop */
+  r = (r - (c(1) = r%basis))/basis;
+  r = (r - (c(2) = r%basis))/basis;
+  r = (r - (c(3) = r%basis))/basis;
+  r = (r - (c(4) = r%basis))/basis;
+  r = (r - (c(5) = r%basis))/basis;
+  r = (r - (c(6) = r%basis))/basis;
+  r = (r - (c(7) = r%basis))/basis;
+  r = (r - (c(8) = r%basis))/basis;
+  /* end of unrolled loop */
+  return string(&_fits_alphabet(1 + c)); /* FIXME: strchar() does not work here */
 }
 
 func fits_rehash(fh)
@@ -3841,7 +4308,7 @@ func fits_rehash(fh)
 
    SEE ALSO: fits, fits_id. */
 {
-  if (min(_car(fh,2,fits_ids(_car(fh,1)))) >= 0.0) return fh;
+  if (min(_car(fh,2,fits_ids(_car(fh,1)))) >= 0) return fh;
   error, "corrupted FITS header data";
 }
 
@@ -3920,37 +4387,97 @@ func fits_get_comment(fh) {
 
 
 func fits_get_list(fh, key)
-/* DOCUMENT fits_get_list(fh, key)
+/* DOCUMENT fits_get_list(fh, key);
       Get value of FITS card KEY in FH and returns it as a vector of integers.
       This function  is intended  to parse, e.g.  the TDIM# cards  in BINTABLE
       extensions.  The syntax of the card must be a string of the form:
         '(ARG1,ARG2,...)'
-      where ARG1, etc are human readable integer values.
+      where ARG1, etc. are human readable integer values.
    SEE ALSO: fits_get.
  */
 {
   str = fits_get(fh, key);
-  if (is_void(str)) return;
-  if (structof(str) != string) {
-    error, "unexpected data type for FITS card \"" + key + "\"";
-  }
-  str = strtrim(str, 3);
-  c = *pointer(str);
-  n = numberof(c);
-  if (n >= 3 && c(1) == '(' && c(n-1) == ')' && sum(c == ')') == 1) {
-    number = sum(c == ',') + 1;
-    result = array(long, number);
-    format_first = "(%d %[^\a]";
-    format_other = ", %d %[^\a]";
-    value = 0L;
-    k = 0;
-    while (sread(str, format=(k ? format_other : format_first), value, str) == 2) {
-      result(++k) = value;
-      if (k >= number) return result;
+  if (is_string(str) && is_scalar(str)) {
+    /* Variables: o = open, v= value, c = close, s = string, t = tail,
+     *            n = number of matches.
+     */
+    o = c = s = t = string();
+    v = 0L;
+
+    /* Parse first value (if any). */
+    n = sread(str, format=" %1[(]%d %1[,)] %[^\a]", o, v, c, t);
+    if (n == 3) {
+      if (c == ")") {
+        /* A single integer. */
+        return [v];
+      }
+    } else if (n == 4) {
+      if (c == ",") {
+        /* A list of integers. */
+        list = array(long, (strlen(str) - 1)/2);
+        list(1) = v;
+        j = 1;
+        f = " %d %1[,)] %[^\a]";
+        for (;;) {
+          n = sread(t, format=f, v, s, t);
+          if (n == 3 && s == c) {
+            list(++j) = v;
+          } else if (n == 2 && s == ")") {
+            list(++j) = v;
+            return list(1:j);
+          } else {
+            break;
+          }
+        }
+      }
+    } else if (n == 1) {
+      /* Check that string matches "()" with any number of spaces. */
+      if (sread(str, format=" %1[(] %1[)] %[^\a]", o, s, t) == 2) {
+        return;
+      }
+    } else if (n == 0) {
+      /* Check that string is empty (with any number of spaces). */
+      if (sread(str, format=" %[^\a]", t) == 0) {
+        return;
+      }
     }
+  } else if (is_void(str)) {
+    return;
+  } else if (! is_string(str)) {
+    error, "unexpected data type for FITS card \"" + key + "\"";
   }
   error, "syntax error in value of FITS card \"" + key + "\"";
 }
+
+/*---------------------------------------------------------------------------*/
+/* READING/WRITING OF BINARY DATA */
+
+local _FITS_XDR64, _FITS_INTEL32, _FITS_INTEL64;
+func _fits_set_primitives(stream)
+/* DOCUMENT _fits_set_primitives, stream;
+     Set binary format of data stream to XDR (eXternal Data Representation)
+     which is the same as IEEE format with 32-bits (int) and 64-bits (long)
+     integers and big-endian byte order.
+   SEE ALSO: open, set_primitives, fits_open, _fits_vopen.
+ */
+{
+  set_primitives, stream, _FITS_XDR64;
+  save, stream, complex; /* make stream aware of the definition of a complex */
+}
+
+/* XDR64 = eXternal Data Representation (IEEE standard with 32-bit int and
+   64-bit long integers and big endian byte order) */
+/*                         size   alignment   byte order */
+_FITS_XDR64 = [/*   char */   1,         1,         1,
+               /*  short */   2,         2,         1,
+               /*    int */   4,         4,         1,
+               /*   long */   8,         8,         1,
+               /*  float */   4,         4,         1,
+               /* double */   8,         8,         1,
+               /*           sign  exp   exp   man   man   man   exp
+                *           addr  addr  len   addr  len   norm  bias
+                *  float */   0,    1,    8,    9,   23,    0,  0x7f,
+               /* double */   0,    1,   11,   12,   52,    0,  0x3ff];
 
 /*---------------------------------------------------------------------------*/
 /* INITIALIZATION OF PRIVATE DATA */
@@ -3974,6 +4501,7 @@ _fits_false = 'F';
      your FITS handles: see fits_rehash).
    SEE ALSO: fits, fits_init, fits_rehash, fits_id, fits_key. */
 
+/* PRIVATE */ local _fits_min_id, _fits_max_id, _fits_id_null, _fits_idtype, _fits_check_idtype;
 /* PRIVATE */ local _fits_id_simple, _fits_id_bitpix, _fits_id_naxis, _fits_id_end;
 /* PRIVATE */ local _fits_id_comment, _fits_id_history, _fits_id_xtension, _fits_id_bscale;
 /* PRIVATE */ local _fits_id_bzero, _fits_id_gcount, _fits_id_pcount, _fits_id_hierarch;
@@ -4040,10 +4568,10 @@ func fits_init(sloopy=, allow=, blank=)
 
    SEE ALSO: fits, fits_rehash. */
 {
-  extern _fits_digitize,    _fits_multiplier;
-  extern _fits_alphabet,    _fits_max_id;
+  extern _fits_digitize,    _fits_multiplier, _fits_alphabet;
+  extern _fits_min_id,      _fits_max_id,     _fits_idtype, _fits_check_idtype;
   extern _fits_id_simple,   _fits_id_bitpix;
-  extern _fits_id_naxis,    _fits_id_end;
+  extern _fits_id_naxis,    _fits_id_end,     _fits_id_null;
   extern _fits_id_comment,  _fits_id_history, _fits_id_hierarch;
   extern _fits_id_xtension, _fits_id_extname, _fits_id_special;
   extern _fits_id_bscale,   _fits_id_bzero;
@@ -4055,25 +4583,34 @@ func fits_init(sloopy=, allow=, blank=)
   _fits_strict = (strict = (! sloopy && is_void(allow)));
 
   /* Prepare key<->id conversion arrays. */
-  _fits_alphabet = _(, '\0', '-', '_', char(indgen('0':'9')),
-                                       char(indgen('A':'Z')));
+  _fits_alphabet = _('\0', '-', '_', char(indgen('0':'9')), char(indgen('A':'Z')));
   if (! is_void(allow)) {
     /* Add more allowed characters for FITS keywords. */
-    if ((s = structof(allow)) == string && ! dimsof(allow)(1)) {
-      allow = *pointer(allow);
-    } else if (s != char) {
-      error, "value of keyword ALLOW must be a string or an array of char's";
+    if (is_string(allow) && is_scalar(allow)) {
+      allow = strchar(allow);
+    } else if (structof(allow) != char) {
+      error, "value of keyword ALLOW must be a scalar string or an array of char's";
     }
     n = numberof(allow);
     for (i=1 ; i<=n ; ++i) {
-      if (noneof(allow(i) == _fits_alphabet)) grow, _fits_alphabet, allow(i);
+      if (noneof(allow(i) == _fits_alphabet)) {
+        grow, _fits_alphabet, allow(i);
+      }
     }
   }
   basis = numberof(_fits_alphabet);
-  _fits_multiplier = double(basis)^indgen(0:7);
-  _fits_max_id = sum(_fits_multiplier * (basis-1.0));
+  if (sizeof(long) >= 8) {
+    _fits_idtype = long;
+    _fits_check_idtype = is_integer;
+  } else {
+    _fits_idtype = double;
+    _fits_check_idtype = is_real;
+  }
+  _fits_multiplier = _fits_idtype(basis)^indgen(0:7);
+  _fits_max_id = sum(_fits_multiplier*(basis - 1));
+  _fits_min_id = _fits_idtype(0);
   _fits_digitize = array(-1, 256);
-  _fits_digitize(1 + _fits_alphabet) = indgen(0:basis-1);
+  _fits_digitize(1 + (_fits_alphabet & 0xFF)) = indgen(0 : basis - 1);
 
   /* Deal with "blanck/space" characters (spaces and '\0' _must_ all have
      their digitize value equal to 0). */
@@ -4081,12 +4618,12 @@ func fits_init(sloopy=, allow=, blank=)
     error, "digitize value of spaces must be zero (BUG)";
   _fits_digitize(1 + ' ') = space;
   if (! is_void(blank)) {
-    if ((s = structof(blank)) == string && ! dimsof(blank)(1)) {
-      blank = *pointer(blank);
-    } else if (s != char) {
+    if (is_string(blank) && is_scalar(blank)) {
+      blank = strchar(blank);
+    } else if (structof(blank) != char) {
       error, "value of keyword BLANK must be a string or an array of char's";
     }
-    _fits_digitize(1 + blank) = space;
+    _fits_digitize(1 + (blank & 0xFF)) = space;
   }
 
   if (! strict) {
@@ -4113,9 +4650,10 @@ func fits_init(sloopy=, allow=, blank=)
   _fits_id_gcount   = fits_id("GCOUNT");
   _fits_id_groups   = fits_id("GROUPS");
   //_fits_id_extend = fits_id("EXTEND");
+  _fits_id_null     = _fits_min_id;
   _fits_id_special  = [_fits_id_simple, _fits_id_bitpix, _fits_id_naxis,
-                       _fits_id_end, 0.0, _fits_id_comment, _fits_id_history,
-                       _fits_id_xtension];
+                       _fits_id_end, _fits_id_null, _fits_id_comment,
+                       _fits_id_history, _fits_id_xtension];
 }
 
 /*---------------------------------------------------------------------------*/
@@ -4124,7 +4662,7 @@ func fits_init(sloopy=, allow=, blank=)
 /* Initializes FITS internals (must be last statement of this file).  The
    following allows for non-standard keyword characters usually found in
    FITS files produced by IRAF... */
-if (is_void(_fits_alphabet)) fits_init, allow="/."; /*  */
+if (is_void(_fits_alphabet)) fits_init, allow="/."; /* deal with IRAF */
 
 /*---------------------------------------------------------------------------*/
 /* SUPPORT FOR OBSOLETE API */
@@ -4294,12 +4832,12 @@ fitsOldHeaderKeywords = fits_toupper(fitsOldHeaderMembers);
   return r(1:i);
 }
 
-/*---------------------------------------------------------------------------*
- * Local Variables:                                                          *
- * mode: Yorick                                                              *
- * tab-width: 8                                                              *
- * fill-column: 78                                                           *
- * c-basic-offset: 2                                                         *
- * coding: latin-1                                                           *
- * End:                                                                      *
- *---------------------------------------------------------------------------*/
+/*
+ * Local Variables:
+ * mode: Yorick
+ * tab-width: 8
+ * fill-column: 78
+ * c-basic-offset: 2
+ * coding: latin-1
+ * End:
+ */

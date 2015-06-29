@@ -119,3 +119,42 @@ MAIN_DECLARE {
   }
   MAIN_RETURN(0); }
 #endif
+
+#ifdef TEST_SOCKETS
+/* check if IEEE 1003.1 sockets present, seek usock.c */
+#include <sys/types.h>
+#include <sys/socket.h>
+#include <netdb.h>
+MAIN_DECLARE {
+  static struct addrinfo hints, *ai;
+  char text[1025];
+  int fd;
+  hints.ai_family = AF_UNIX;
+  hints.ai_family = AF_UNSPEC;
+  hints.ai_socktype = SOCK_STREAM;
+  hints.ai_flags = AI_PASSIVE;  /* will call bind, not connect */
+  getaddrinfo(0, text, &hints, &ai);
+  fd = socket(ai->ai_family, ai->ai_socktype, ai->ai_protocol);
+  if (fd != -1) {
+    struct sockaddr_storage sad;
+    socklen_t lsad = sizeof(struct sockaddr_storage);
+    struct sockaddr *psad = (struct sockaddr *)&sad;
+    getsockname(fd, psad, &lsad);
+    getnameinfo(psad, lsad, 0, 0, text, 1025, NI_NUMERICSERV);
+  }
+  MAIN_RETURN(0); }
+#endif
+
+#ifdef TEST_FENV_H
+#include <fenv.h>
+#include <signal.h>
+MAIN_DECLARE {
+  int except = FE_DIVBYZERO | FE_INVALID | FE_OVERFLOW;
+  fenv_t env;
+  if (fetestexcept(except)) {
+    feclearexcept(except);
+  }
+  fegetenv(&env);
+  fesetenv(FE_DFL_ENV);
+  MAIN_RETURN(0); }
+#endif
